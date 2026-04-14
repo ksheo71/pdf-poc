@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>구성도 · 1페이지</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      :root {
+        --background: 0 0% 100%;
+        --foreground: 222.2 84% 4.9%;
+        --card: 0 0% 100%;
+        --muted: 210 40% 96.1%;
+        --muted-foreground: 215.4 16.3% 46.9%;
+        --border: 214.3 31.8% 91.4%;
+      }
+      body { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
+      .bg-card { background: hsl(var(--card)); }
+      .text-muted-foreground { color: hsl(var(--muted-foreground)); }
+      .border-default { border-color: hsl(var(--border)); }
+
+      .overlay {
+        position: absolute;
+        box-sizing: border-box;
+        pointer-events: auto;
+      }
+      .overlay[data-state="idle"]     { border: 1px dotted #3b82f6; }
+      .overlay[data-state="selected"],
+      .overlay[data-state="editing"]  { border: 1px solid  #ef4444; z-index: 2; }
+
+      .joint {
+        position: absolute;
+        width: 6px; height: 6px;
+        background: #ef4444;
+        border-radius: 9999px;
+        box-sizing: border-box;
+        display: none;
+        z-index: 3;
+      }
+      .overlay[data-state="selected"] .joint,
+      .overlay[data-state="editing"]  .joint { display: block; }
+      .joint[data-side="top"],
+      .joint[data-side="bottom"]    { cursor: ns-resize; }
+      .joint[data-side="left"],
+      .joint[data-side="right"]     { cursor: ew-resize; }
+
+      .editor {
+        position: absolute;
+        inset: 0;
+        padding: 0;
+        outline: none;
+        white-space: nowrap;
+        overflow: hidden;
+        line-height: 1;
+        background: transparent;
+        caret-color: #ef4444;
+      }
+      .overlay[data-state="editing"] .editor { cursor: text; }
+    </style>
+  </head>
+  <body class="min-h-screen">
+    <main class="mx-auto max-w-5xl p-6 space-y-4">
+      <header class="flex items-start justify-between gap-4">
+        <div class="space-y-1">
+          <h1 class="text-2xl font-semibold tracking-tight">구성도 · 1페이지</h1>
+          <p class="text-sm text-muted-foreground">
+            점선 박스 클릭 → 빨간 실선 + 조인트. 한 번 더 클릭 / 점선에서 더블클릭 → 편집. 선택 상태에서 방향키로 이동 (Ctrl+방향키 = 미세 이동).
+          </p>
+        </div>
+        <button id="download-btn"
+          class="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:opacity-50">
+          PDF 다운로드
+        </button>
+      </header>
+
+      <section class="rounded-lg border border-default bg-card shadow-sm p-4">
+        <div id="viewer" class="relative mx-auto" style="line-height: 0;">
+          <img id="pdf-image" src="/api/page1/image.png" alt="구성도 1페이지"
+               class="block w-full h-auto select-none" draggable="false" />
+        </div>
+      </section>
+    </main>
+
+    <script>
+      (async () => {
+        const viewer = document.getElementById("viewer");
+        const img = document.getElementById("pdf-image");
+        const MARGIN = 0;
+
+        const [meta] = await Promise.all([
+          fetch("/api/page1").then((r) => r.json()),
+          new Promise((resolve) => {
+            if (img.complete && img.naturalWidth > 0) resolve();
+            else img.addEventListener("load", resolve, { once: true });
+          }),
+        ]);
+
+        const { image_width, image_height, scale, blocks } = meta;
+
+        const boxes = blocks.map((b) => {
+          const el = document.createElement("div");
+          el.className = "overlay";
+          el.dataset.state = "idle";
+
+          for (const side of ["top", "bottom", "left", "right"]) {
+            const h = document.createElement("div");
+            h.className = "joint";
+            h.dataset.side = side;
+            el.appendChild(h);
+          }
+
+          const editor = document.createElement("div");
+          editor.className = "editor";
+          editor.contentEditable = "false";
+          editor.spellcheck = false;
+          editor.textContent = b.text || "";
+          editor.style.color = b.color || "#000";
+          el.appendChild(editor);
+
+          viewer.appendChild(el);
+
+          const origRect = {
+            x0: b.x0 * scale,
+            y0: b.y0 * scale,
+            x1: b.x1 * scale,
+            y1: b.y1 * scale,
+          };
+          return {
+            el,
+            editor,
+            imgRect: { ...origRect },
+            origRect,
+            originalText: b.text || "",
+            fontSize: b.font_size || 10,
+            fontName: b.font_name || "",
+            color: b.color || "#000000",
+            originY: b.origin_y,
+          };
+        });
+
+        function layoutBox(box) {
+          const ratioX = img.clientWidth / image_width;
+          const ratioY = img.clientHeight / image_height;
+          const { x0, y0, x1, y1 } = box.imgRect;
+          const left = x0 * ratioX - MARGIN;
+          const top = y0 * ratioY - MARGIN;
+          const width = (x1 - x0) * ratioX + MARGIN * 2;
+          const height = (y1 - y0) * ratioY + MARGIN * 2;
+          box.el.style.left = `${left}px`;
+          box.el.style.top = `${top}px`;
+          box.el.style.width = `${width}px`;
+          box.el.style.height = `${height}px`;
+
+          const joints = box.el.querySelectorAll(".joint");
+          joints.forEach((h) => {
+            const half = 3;
+            const side = h.dataset.side;
+            if (side === "top")    { h.style.left = `${width / 2 - half}px`; h.style.top = `${-half}px`; }
+            if (side === "bottom") { h.style.left = `${width / 2 - half}px`; h.style.top = `${height - half}px`; }
+            if (side === "left")   { h.style.left = `${-half}px`; h.style.top = `${height / 2 - half}px`; }
+            if (side === "right")  { h.style.left = `${width - half}px`; h.style.top = `${height / 2 - half}px`; }
+          });
+
+          box.editor.style.fontSize = `${box.fontSize * scale * ratioY}px`;
+        }
+
+        const layoutAll = () => boxes.forEach(layoutBox);
+        layoutAll();
+        new ResizeObserver(layoutAll).observe(img);
+
+        let active = null;
+        function setState(box, state) {
+          if (active && active !== box) {
+            active.el.dataset.state = "idle";
+            active.editor.contentEditable = "false";
+          }
+          box.el.dataset.state = state;
+          active = box;
+          if (state === "editing") {
+            box.editor.contentEditable = "true";
+            box.editor.focus();
+            const range = document.createRange();
+            range.selectNodeContents(box.editor);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+          } else {
+            box.editor.contentEditable = "false";
+          }
+        }
+
+        function deselect() {
+          if (!active) return;
+          active.el.dataset.state = "idle";
+          active.editor.contentEditable = "false";
+          active = null;
+        }
+
+        for (const box of boxes) {
+          box.el.addEventListener("mousedown", (e) => {
+            if (e.target.classList.contains("joint")) return;
+            if (box.el.dataset.state === "editing" && e.target === box.editor) return;
+            e.stopPropagation();
+          });
+
+          box.el.addEventListener("click", (e) => {
+            if (e.target.classList.contains("joint")) return;
+            if (box.el.dataset.state === "editing" && e.target === box.editor) {
+              e.stopPropagation();
+              return;
+            }
+            e.stopPropagation();
+            const s = box.el.dataset.state;
+            if (s === "idle") setState(box, "selected");
+            else if (s === "selected") setState(box, "editing");
+          });
+
+          box.el.addEventListener("dblclick", (e) => {
+            if (e.target.classList.contains("joint")) return;
+            e.stopPropagation();
+            setState(box, "editing");
+          });
+
+          box.editor.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              box.editor.blur();
+              deselect();
+            }
+          });
+
+          box.el.querySelectorAll(".joint").forEach((h) => {
+            h.addEventListener("click", (e) => e.stopPropagation());
+            h.addEventListener("mousedown", (e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              const side = h.dataset.side;
+              const startX = e.clientX;
+              const startY = e.clientY;
+              const startRect = { ...box.imgRect };
+              const ratioX = img.clientWidth / image_width;
+              const ratioY = img.clientHeight / image_height;
+
+              function onMove(ev) {
+                const dx = (ev.clientX - startX) / ratioX;
+                const dy = (ev.clientY - startY) / ratioY;
+                const r = { ...startRect };
+                if (side === "top")    r.y0 = Math.min(r.y1 - 4, r.y0 + dy);
+                if (side === "bottom") r.y1 = Math.max(r.y0 + 4, r.y1 + dy);
+                if (side === "left")   r.x0 = Math.min(r.x1 - 4, r.x0 + dx);
+                if (side === "right")  r.x1 = Math.max(r.x0 + 4, r.x1 + dx);
+                box.imgRect = r;
+                layoutBox(box);
+              }
+              function onUp() {
+                window.removeEventListener("mousemove", onMove);
+                window.removeEventListener("mouseup", onUp);
+              }
+              window.addEventListener("mousemove", onMove);
+              window.addEventListener("mouseup", onUp);
+            });
+          });
+        }
+
+        document.addEventListener("click", deselect);
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape" && active) {
+            deselect();
+            return;
+          }
+          if (!active || active.el.dataset.state !== "selected") return;
+          const arrows = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+          if (!arrows.includes(e.key)) return;
+          e.preventDefault();
+          const step = e.ctrlKey ? 1 : 5;
+          let dx = 0, dy = 0;
+          if (e.key === "ArrowLeft")  dx = -step;
+          if (e.key === "ArrowRight") dx =  step;
+          if (e.key === "ArrowUp")    dy = -step;
+          if (e.key === "ArrowDown")  dy =  step;
+          active.imgRect.x0 += dx;
+          active.imgRect.x1 += dx;
+          active.imgRect.y0 += dy;
+          active.imgRect.y1 += dy;
+          layoutBox(active);
+        });
+
+        const rectEq = (a, b) => a.x0 === b.x0 && a.y0 === b.y0 && a.x1 === b.x1 && a.y1 === b.y1;
+
+        document.getElementById("download-btn").addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const dirty = boxes.filter((box) =>
+            box.editor.textContent !== box.originalText || !rectEq(box.imgRect, box.origRect)
+          );
+          const payload = {
+            boxes: dirty.map((box) => ({
+              orig_x0: box.origRect.x0 / scale,
+              orig_y0: box.origRect.y0 / scale,
+              orig_x1: box.origRect.x1 / scale,
+              orig_y1: box.origRect.y1 / scale,
+              x0: box.imgRect.x0 / scale,
+              y0: box.imgRect.y0 / scale,
+              x1: box.imgRect.x1 / scale,
+              y1: box.imgRect.y1 / scale,
+              text: box.editor.textContent,
+              font_name: box.fontName,
+              font_size: box.fontSize,
+              color: box.color,
+              origin_y: box.originY,
+            })),
+          };
+          const res = await fetch("/api/commit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            alert("커밋 실패: " + res.status);
+            return;
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "구성도_수정본.pdf";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        });
+      })();
+    </script>
+  </body>
+</html>
