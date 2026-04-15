@@ -27,3 +27,8 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# Runtime artifacts
+.pdf-poc.pid
+.pdf-poc.log
+.pdf-poc.err.log
